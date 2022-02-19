@@ -8,17 +8,16 @@ namespace Tests
 {
     public abstract class ClassContext<T> where T : class
     {
+        private readonly Dictionary<Type, BuiltMocks> _mocks = new Dictionary<Type, BuiltMocks>();
+        
         private T _sut = null;
-        protected T Sut => _sut ??= Resolve();
+        protected T Sut => _sut ??= Resolve(_mocks);
 
         private class BuiltMocks
         {
             public object Mock { get; set; }
             public object MockValue { get; set; }
         }
-
-        private Dictionary<Type, BuiltMocks> _mocks = new Dictionary<Type, BuiltMocks>();
-
 
         protected Mock<TE> MockOf<TE>() where TE : class
         {
@@ -30,19 +29,15 @@ namespace Tests
             Mock<TE> mock = null;
             if (typeof(TE).IsClass)
             {
-                var parameters = GetParamInfoForConstructorOfType<TE>( false);
+                var parameters = GetParamInfoForConstructorOfType<TE>(false);
 
                 if (parameters.Length > 0)
                 {
-                    var items = parameters.Select(t => GetDefault(t.ParameterType)).ToArray();
-                    mock = new Mock<TE>(items);
+                    mock = new Mock<TE>(parameters.Select(t => GetDefault(t.ParameterType)).ToArray());
                 }
             }
-            else
-            {
-                mock = new Mock<TE>();
-            }
 
+            mock ??= new Mock<TE>();
 
             _mocks.Add(typeof(TE), new BuiltMocks
             {
@@ -52,16 +47,11 @@ namespace Tests
             return MockOf<TE>();
         }
 
-        private static object GetDefault(Type type)
-        {
-            return type.IsValueType ? Activator.CreateInstance(type) : null;
-        }
-
-        private T Resolve()
+        private static T Resolve(IReadOnlyDictionary<Type, BuiltMocks> dictionary)
         {
             var allTypes = GetParamInfoForConstructorOfType<T>()
                 .Select(t => t.ParameterType)
-                .Select(t => _mocks.ContainsKey(t) ? _mocks[t].MockValue : null)
+                .Select(t => dictionary.ContainsKey(t) ? dictionary[t].MockValue : null)
                 .ToArray();
 
             return allTypes.Any()
@@ -69,10 +59,6 @@ namespace Tests
                 : (T) Activator.CreateInstance(typeof(T));
         }
 
-        private static ParameterInfo[] GetParamInfoForConstructorOfType<TE>(bool largest = true)
-        {
-            return GetParamInfoForConstructorOfType(typeof(TE), largest);
-        }
 
         private static ParameterInfo[] GetParamInfoForConstructorOfType(Type type, bool largest = true)
         {
@@ -83,5 +69,10 @@ namespace Tests
 
             return part.FirstOrDefault()?.GetParameters() ?? Array.Empty<ParameterInfo>();
         }
+
+        private static object GetDefault(Type type) => type.IsValueType ? Activator.CreateInstance(type) : null;
+
+        private static ParameterInfo[] GetParamInfoForConstructorOfType<TE>(bool largest = true)
+            => GetParamInfoForConstructorOfType(typeof(TE), largest);
     }
 }
