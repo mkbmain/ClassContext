@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using Moq;
 
 namespace Tests
@@ -8,61 +9,79 @@ namespace Tests
     public abstract class ClassContext<T> where T : class
     {
         private T _sut = null;
-        public T Sut => _sut ??= Resolve();
+        protected T Sut => _sut ??= Resolve();
 
-        private Dictionary<Type, object> _mocks = new Dictionary<Type, object>();
-        private Dictionary<Type, object> _mocks2 = new Dictionary<Type, object>();
+        private class BuiltMocks
+        {
+            public object Mock { get; set; }
+            public object MockValue { get; set; }
+        }
 
-        public Mock<TE> MockOf<TE>() where TE : class
+        private Dictionary<Type, BuiltMocks> _mocks = new Dictionary<Type, BuiltMocks>();
+
+
+        protected Mock<TE> MockOf<TE>() where TE : class
         {
             if (_mocks.ContainsKey(typeof(TE)))
             {
-                return (Mock<TE>) _mocks[typeof(TE)];
+                return (Mock<TE>) _mocks[typeof(TE)].Mock;
             }
 
-            Mock<TE> mock = new Mock<TE>();
+            Mock<TE> mock = null;
             if (typeof(TE).IsClass)
             {
-                var smallest = typeof(TE).GetConstructors().Where(t => t.IsPublic)
-                    .OrderBy(t => t.GetParameters().Length)
-                    .FirstOrDefault();
+                var parameters = GetParamInfoForConstructorOfType<TE>( false);
 
-                if (smallest.GetParameters().Length > 0)
+                if (parameters.Length > 0)
                 {
-                    var par = smallest.GetParameters().Select(t => t.ParameterType);
-                    var items = par.Select(GetDefault).ToArray();
+                    var items = parameters.Select(t => GetDefault(t.ParameterType)).ToArray();
                     mock = new Mock<TE>(items);
                 }
             }
+            else
+            {
+                mock = new Mock<TE>();
+            }
 
 
-            _mocks.Add(typeof(TE), mock);
-            _mocks2.Add(typeof(TE), mock.Object);
+            _mocks.Add(typeof(TE), new BuiltMocks
+            {
+                Mock = mock,
+                MockValue = mock.Object
+            });
             return MockOf<TE>();
         }
 
         private static object GetDefault(Type type)
         {
-            if (type.IsValueType)
-            {
-                return Activator.CreateInstance(type);
-            }
-
-            return null;
+            return type.IsValueType ? Activator.CreateInstance(type) : null;
         }
 
         private T Resolve()
         {
-            var biggestEntryPoint = typeof(T).GetConstructors().Where(t => t.IsPublic)
-                .OrderByDescending(t => t.GetParameters().Length)
-                .FirstOrDefault();
-
-            var par = biggestEntryPoint.GetParameters();
-            var allTypes = par.Select(t => t.ParameterType).Where(t => t != null)
+            var allTypes = GetParamInfoForConstructorOfType<T>()
+                .Select(t => t.ParameterType)
+                .Select(t => _mocks.ContainsKey(t) ? _mocks[t].MockValue : null)
                 .ToArray();
 
-            var types = allTypes.Select(t => _mocks2.ContainsKey(t) ? _mocks2[t] : null).ToArray();
-            return (T) Activator.CreateInstance(typeof(T), types);
+            return allTypes.Any()
+                ? (T) Activator.CreateInstance(typeof(T), allTypes)
+                : (T) Activator.CreateInstance(typeof(T));
+        }
+
+        private static ParameterInfo[] GetParamInfoForConstructorOfType<TE>(bool largest = true)
+        {
+            return GetParamInfoForConstructorOfType(typeof(TE), largest);
+        }
+
+        private static ParameterInfo[] GetParamInfoForConstructorOfType(Type type, bool largest = true)
+        {
+            var entryPoints = type.GetConstructors().Where(t => t.IsPublic);
+            var part = largest
+                ? entryPoints.OrderByDescending(t => t.GetParameters().Length)
+                : entryPoints.OrderBy(t => t.GetParameters().Length);
+
+            return part.FirstOrDefault()?.GetParameters() ?? Array.Empty<ParameterInfo>();
         }
     }
 }
